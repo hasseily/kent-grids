@@ -13,11 +13,11 @@ In Dependencies folder, I have included a dll folder which have a bunch of DLL f
 This test project setup will help to those peoples who are strugging with the SDL2 & SDL2_gfx project build & getting errors or to run any SDL2 programs.
 
 # Contents
-SDL2 all main headers files
-SDL2_image
-SDL2_mixer
-SDL2_net
-SDL2_ttf
+SDL2 all main headers files,
+SDL2_image,
+SDL2_mixer,
+SDL2_net,
+SDL2_ttf &
 SDL2_gfx
 
 # How to build this Test Project?
