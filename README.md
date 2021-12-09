@@ -9,8 +9,8 @@ SDL 2.0 is distributed under the zlib license. This license allows you to use SD
 
 # About This SDL2 Project Build For Visual Studio Code
 I have included & fully set up a test project for SDL2. It has all the necessary files (check the Dependencies folder) to get started with SDL2.
-In Dependencies folder, I have included a dll folder which have a bunch of DLL files for SDL2.
-This test project setup will help to those peoples who are strugging with the SDL2 & SDL2_gfx project build & getting errors or to run any SDL2 programs. 
+In the Dependencies folder, I have included a DLL folder that has a bunch of DLL files for SDL2.
+This test project setup will help those people who are struggling with the SDL2 & SDL2_gfx project build & getting errors or running any SDL2 programs. 
 It has all the SDL2 header files (SDL2, SDL2_image, SDL2_mixer, SDL2_net, SDL2_ttf & SDL2_gfx).
 
 # How to build this Test Project?
@@ -21,5 +21,5 @@ After that, go to Linker & set the Additional Library Directories to ...\lib\x64
 Then click on Apply & build the project. 
 
 Now if you try to run the program, you'll get some DLL file missing errors. Don't get scared!
-You have to then copy all the DLL files from the dll folder (according to your solution platform x86/x64) & paste it into your exectable binary(x86/x64) file's directory.
-That's it! Clean the project, build the project again & run the program!
+You have to then copy all the DLL files from the DLL folder (according to your solution platform x86/x64) & paste them into your executable binary (x86/x64) file's directory.
+That's it! just clean the project, build the project again & run the program!
