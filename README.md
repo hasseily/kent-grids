@@ -23,3 +23,6 @@ Then click on Apply & build the project.
 Now if you try to run the program, you'll get some DLL file missing errors. Don't get scared!
 You have to then copy all the DLL files from the DLL folder (according to your solution platform x86/x64) & paste them into your executable binary (x86/x64) file's directory.
 That's it! just clean the project, build the project again & run the program!
+
+# Note
+If you find any build toolset kind of errors, make sure you have selected Window SDK Version 10.0.
