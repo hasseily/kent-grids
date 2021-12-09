@@ -25,4 +25,4 @@ You have to then copy all the DLL files from the DLL folder (according to your s
 That's it! just clean the project, build the project again & run the program!
 
 # Note
-If you find any build toolset kind of errors, make sure you have selected Window SDK Version 10.0.
+If you find any build toolset kind of errors, make sure you have selected Windows SDK Version 10.0.
