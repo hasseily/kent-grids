@@ -1,4 +1,4 @@
-# SDL2 (Simple DirectMedia Layer)
+# About SDL2
 
 ![SDL2](/Resources/Branding/logo.png?raw=true"SDL")
 
@@ -7,8 +7,8 @@ SDL officially supports Windows, Mac OS X, Linux, iOS, and Android. Support for 
 SDL is written in C, works natively with C++, and there are bindings available for several other languages, including C# and Python.
 SDL 2.0 is distributed under the zlib license. This license allows you to use SDL freely in any software.
 
-# About This SDL2 Project Build For Visual Studio Code
-I have included & fully set up a test project for SDL2. It has all the necessary files (check the Dependencies folder) to get started with SDL2.
+# About This Repository
+I have included & fully set up a test project of SDL2 for Visual Studio Code. It has all the necessary files (check the Dependencies folder) to get started with SDL2.
 In the Dependencies folder, I have included a DLL folder that has a bunch of DLL files for SDL2.
 This test project setup will help those people who are struggling with the SDL2 & SDL2_gfx project build & getting errors or running any SDL2 programs. 
 It has all the SDL2 header files (SDL2, SDL2_image, SDL2_mixer, SDL2_net, SDL2_ttf & SDL2_gfx).
