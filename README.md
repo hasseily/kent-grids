@@ -1,5 +1,6 @@
 # About Repository
 ![DemoWindow](/Resources/Branding/DemoWindow.png?raw=true"DemoWindow")
+
 I have fully set up a test project of SDL2 for Visual Studio Code 2019/2022 users. It has all the necessary dependency files to get started with SDL2.
 In the Dependencies folder, I have included a bin folder that has a bunch of DLL files for dynamically linking of your project.
 The main reason I have made this repository to help those people who are struggling with SDL2 & SDL2_gfx success project build & those who are getting errors when they try to run any SDL2 projects. It has all the SDL2 header files & also it has SDL2_image, SDL2_mixer, SDL2_net, SDL2_ttf, SDL2_gfx. Additionally, It also has GLFW, GLEW & ImGui support for your SDL2 projects.
