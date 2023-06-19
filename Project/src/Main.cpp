@@ -3,9 +3,12 @@
 
 #include <iostream>
 
-#include "Imgui/imgui.h"
-#include "Imgui/imgui_impl_sdl.h"
-#include "Imgui/imgui_impl_sdlrenderer.h"
+#include "imgui/imgui.h"
+#include "imgui/imgui_impl_sdl.h"
+#include "imgui/imgui_impl_sdlrenderer.h"
+
+#include <glm/glm.hpp>
+#include <stb_image.h>
 
 int main(int argc, char* argv[]) {
 	SDL_Init(SDL_INIT_EVERYTHING);

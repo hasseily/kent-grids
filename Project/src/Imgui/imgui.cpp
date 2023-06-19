@@ -1,4 +1,4 @@
-// dear imgui, 1.88 WIP
+// dear imgui, v1.87
 // (main code and documentation)
 
 // Help:
@@ -73,6 +73,7 @@ CODE
 // [SECTION] INPUTS
 // [SECTION] ERROR CHECKING
 // [SECTION] LAYOUT
+// [SECTION] STACK LAYOUT
 // [SECTION] SCROLLING
 // [SECTION] TOOLTIPS
 // [SECTION] POPUPS
@@ -972,6 +973,26 @@ static void             NavRestoreLayer(ImGuiNavLayer layer);
 static void             NavRestoreHighlightAfterMove();
 static int              FindWindowFocusIndex(ImGuiWindow* window);
 
+// Stack Layout
+static ImGuiLayout*     FindLayout(ImGuiID id, ImGuiLayoutType type);
+static ImGuiLayout*     CreateNewLayout(ImGuiID id, ImGuiLayoutType type, ImVec2 size);
+static void             BeginLayout(ImGuiID id, ImGuiLayoutType type, ImVec2 size, float align);
+static void             EndLayout(ImGuiLayoutType type);
+static void             PushLayout(ImGuiLayout* layout);
+static void             PopLayout(ImGuiLayout* layout);
+static void             BalanceLayoutSprings(ImGuiLayout& layout);
+static ImVec2           BalanceLayoutItemAlignment(ImGuiLayout& layout, ImGuiLayoutItem& item);
+static void             BalanceLayoutItemsAlignment(ImGuiLayout& layout);
+static void             BalanceChildLayouts(ImGuiLayout& layout);
+static ImVec2           CalculateLayoutSize(ImGuiLayout& layout, bool collapse_springs);
+static ImGuiLayoutItem* GenerateLayoutItem(ImGuiLayout& layout, ImGuiLayoutItemType type);
+static float            CalculateLayoutItemAlignmentOffset(ImGuiLayout& layout, ImGuiLayoutItem& item);
+static void             TranslateLayoutItem(ImGuiLayoutItem& item, const ImVec2& offset);
+static void             BeginLayoutItem(ImGuiLayout& layout);
+static void             EndLayoutItem(ImGuiLayout& layout);
+static void             AddLayoutSpring(ImGuiLayout& layout, float weight, float spacing);
+static void             SignedIndent(float indent);
+
 // Error Checking and Debug Tools
 static void             ErrorCheckNewFrameSanityChecks();
 static void             ErrorCheckEndFrameSanityChecks();
@@ -1081,6 +1102,7 @@ ImGuiStyle::ImGuiStyle()
     ScrollbarRounding       = 9.0f;             // Radius of grab corners rounding for scrollbar
     GrabMinSize             = 10.0f;            // Minimum width/height of a grab box for slider/scrollbar
     GrabRounding            = 0.0f;             // Radius of grabs corners rounding. Set to 0.0f to have rectangular slider grabs.
+    LayoutAlign             = 0.5f;             // Element alignment inside horizontal and vertical layouts (0.0f - left/top, 1.0f - right/bottom, 0.5f - center).
     LogSliderDeadzone       = 4.0f;             // The size in pixels of the dead-zone around zero on logarithmic sliders that cross zero.
     TabRounding             = 4.0f;             // Radius of upper corners of a tab. Set to 0.0f to have rectangular tabs.
     TabBorderSize           = 0.0f;             // Thickness of border around tabs.
@@ -1216,7 +1238,7 @@ void ImGuiIO::AddInputCharacter(unsigned int c)
         return;
 
     ImGuiInputEvent e;
-    e.Type = ImGuiInputEventType_Text;
+    e.Type = ImGuiInputEventType_Char;
     e.Source = ImGuiInputSource_Keyboard;
     e.Text.Char = c;
     g.InputEventsQueue.push_back(e);
@@ -1286,7 +1308,7 @@ void ImGuiIO::ClearInputKeys()
         KeysData[n].DownDurationPrev = -1.0f;
     }
     KeyCtrl = KeyShift = KeyAlt = KeySuper = false;
-    KeyMods = ImGuiKeyModFlags_None;
+    KeyMods = KeyModsPrev = ImGuiKeyModFlags_None;
     for (int n = 0; n < IM_ARRAYSIZE(NavInputsDownDuration); n++)
         NavInputsDownDuration[n] = NavInputsDownDurationPrev[n] = -1.0f;
 }
@@ -2614,14 +2636,15 @@ void ImGuiListClipper::Begin(int items_count, float items_height)
 
 void ImGuiListClipper::End()
 {
+    // In theory here we should assert that we are already at the right position, but it seems saner to just seek at the end and not assert/crash the user.
     ImGuiContext& g = *GImGui;
+    if (ItemsCount >= 0 && ItemsCount < INT_MAX && DisplayStart >= 0)
+        ImGuiListClipper_SeekCursorForItem(this, ItemsCount);
+    ItemsCount = -1;
+
+    // Restore temporary buffer and fix back pointers which may be invalidated when nesting
     if (ImGuiListClipperData* data = (ImGuiListClipperData*)TempData)
     {
-        // In theory here we should assert that we are already at the right position, but it seems saner to just seek at the end and not assert/crash the user.
-        if (ItemsCount >= 0 && ItemsCount < INT_MAX && DisplayStart >= 0)
-            ImGuiListClipper_SeekCursorForItem(this, ItemsCount);
-
-        // Restore temporary buffer and fix back pointers which may be invalidated when nesting
         IM_ASSERT(data->ListClipper == this);
         data->StepNo = data->Ranges.Size;
         if (--g.ClipperTempDataStacked > 0)
@@ -2631,7 +2654,6 @@ void ImGuiListClipper::End()
         }
         TempData = NULL;
     }
-    ItemsCount = -1;
 }
 
 void ImGuiListClipper::ForceDisplayRangeByIndices(int item_min, int item_max)
@@ -2764,8 +2786,8 @@ bool ImGuiListClipper::Step()
     // Advance the cursor to the end of the list and then returns 'false' to end the loop.
     if (ItemsCount < INT_MAX)
         ImGuiListClipper_SeekCursorForItem(this, ItemsCount);
+    ItemsCount = -1;
 
-    End();
     return false;
 }
 
@@ -2884,6 +2906,7 @@ static const ImGuiStyleVarInfo GStyleVarInfo[] =
     { ImGuiDataType_Float, 1, (ImU32)IM_OFFSETOF(ImGuiStyle, TabRounding) },         // ImGuiStyleVar_TabRounding
     { ImGuiDataType_Float, 2, (ImU32)IM_OFFSETOF(ImGuiStyle, ButtonTextAlign) },     // ImGuiStyleVar_ButtonTextAlign
     { ImGuiDataType_Float, 2, (ImU32)IM_OFFSETOF(ImGuiStyle, SelectableTextAlign) }, // ImGuiStyleVar_SelectableTextAlign
+    { ImGuiDataType_Float, 1, (ImU32)IM_OFFSETOF(ImGuiStyle, LayoutAlign) },         // ImGuiStyleVar_LayoutAlign
 };
 
 static const ImGuiStyleVarInfo* GetStyleVarInfo(ImGuiStyleVar idx)
@@ -3316,6 +3339,12 @@ ImGuiWindow::~ImGuiWindow()
     IM_ASSERT(DrawList == &DrawListInst);
     IM_DELETE(Name);
     ColumnsStorage.clear_destruct();
+
+    for (int i = 0; i < DC.Layouts.Data.Size; i++)
+    {
+        ImGuiLayout* layout = (ImGuiLayout*)DC.Layouts.Data[i].val_p;
+        IM_DELETE(layout);
+    }
 }
 
 ImGuiID ImGuiWindow::GetID(const char* str, const char* str_end)
@@ -3544,7 +3573,7 @@ bool ImGui::IsItemHovered(ImGuiHoveredFlags flags)
 {
     ImGuiContext& g = *GImGui;
     ImGuiWindow* window = g.CurrentWindow;
-    if (g.NavDisableMouseHover && !g.NavDisableHighlight && !(flags & ImGuiHoveredFlags_NoNavOverride))
+    if (g.NavDisableMouseHover && !g.NavDisableHighlight)
     {
         if ((g.LastItemData.InFlags & ImGuiItemFlags_Disabled) && !(flags & ImGuiHoveredFlags_AllowWhenDisabled))
             return false;
@@ -3607,6 +3636,8 @@ bool ImGui::ItemHoverable(const ImRect& bb, ImGuiID id)
         return false;
     if (!IsMouseHoveringRect(bb.Min, bb.Max))
         return false;
+    if (g.NavDisableMouseHover)
+        return false;
     if (!IsWindowContentHoverable(window, ImGuiHoveredFlags_None))
     {
         g.HoveredIdDisabled = true;
@@ -3641,9 +3672,6 @@ bool ImGui::ItemHoverable(const ImRect& bb, ImGuiID id)
         if (g.DebugItemPickerBreakId == id)
             IM_DEBUG_BREAK();
     }
-
-    if (g.NavDisableMouseHover)
-        return false;
 
     return true;
 }
@@ -4090,6 +4118,9 @@ static void ImGui::UpdateKeyboardInputs()
     ImGuiContext& g = *GImGui;
     ImGuiIO& io = g.IO;
 
+    // Synchronize io.KeyMods with individual modifiers io.KeyXXX bools
+    io.KeyMods = GetMergedKeyModFlags();
+
     // Import legacy keys or verify they are not used
 #ifndef IMGUI_DISABLE_OBSOLETE_KEYIO
     if (io.BackendUsingLegacyKeyArrays == 0)
@@ -4130,9 +4161,6 @@ static void ImGui::UpdateKeyboardInputs()
         }
     }
 #endif
-
-    // Synchronize io.KeyMods with individual modifiers io.KeyXXX bools
-    io.KeyMods = GetMergedKeyModFlags();
 
     // Clear gamepad data if disabled
     if ((io.BackendFlags & ImGuiBackendFlags_HasGamepad) == 0)
@@ -5108,6 +5136,7 @@ void ImGui::EndFrame()
     // Clear Input data for next frame
     g.IO.MouseWheel = g.IO.MouseWheelH = 0.0f;
     g.IO.InputQueueCharacters.resize(0);
+    g.IO.KeyModsPrev = g.IO.KeyMods; // doing it here is better than in NewFrame() as we'll tolerate backend writing to KeyMods. If we want to firmly disallow it we should detect it.
     memset(g.IO.NavInputs, 0, sizeof(g.IO.NavInputs));
 
     CallContextHooks(&g, ImGuiContextHookType_EndFramePost);
@@ -7063,6 +7092,13 @@ bool ImGui::Begin(const char* name, bool* p_open, ImGuiWindowFlags flags)
         else
             SetLastItemData(window->MoveId, g.CurrentItemFlags, IsMouseHoveringRect(title_bar_rect.Min, title_bar_rect.Max, false) ? ImGuiItemStatusFlags_HoveredRect : 0, title_bar_rect);
 
+        // Mark all layouts as dead. They may be revived in this frame.
+        for (int i = 0; i < window->DC.Layouts.Data.Size; i++)
+        {
+            ImGuiLayout* layout = (ImGuiLayout*)window->DC.Layouts.Data[i].val_p;
+            layout->Live = false;
+        }
+
         // [Test Engine] Register title bar / tab
         if (!(window->Flags & ImGuiWindowFlags_NoTitleBar))
             IMGUI_TEST_ENGINE_ITEM_ADD(g.LastItemData.Rect, g.LastItemData.ID);
@@ -8254,8 +8290,14 @@ bool ImGui::IsMouseClicked(ImGuiMouseButton button, bool repeat)
     const float t = g.IO.MouseDownDuration[button];
     if (t == 0.0f)
         return true;
+
     if (repeat && t > g.IO.KeyRepeatDelay)
-        return CalcTypematicRepeatAmount(t - g.IO.DeltaTime, t, g.IO.KeyRepeatDelay, g.IO.KeyRepeatRate) > 0;
+    {
+        // FIXME: 2019/05/03: Our old repeat code was wrong here and led to doubling the repeat rate, which made it an ok rate for repeat on mouse hold.
+        int amount = CalcTypematicRepeatAmount(t - g.IO.DeltaTime, t, g.IO.KeyRepeatDelay, g.IO.KeyRepeatRate * 0.50f);
+        if (amount > 0)
+            return true;
+    }
     return false;
 }
 
@@ -8477,7 +8519,7 @@ void ImGui::UpdateInputEvents(bool trickle_fast_inputs)
                 }
             }
         }
-        else if (e->Type == ImGuiInputEventType_Text)
+        else if (e->Type == ImGuiInputEventType_Char)
         {
             // Trickling Rule: Stop processing queued events if keys/mouse have been interacted with
             if (trickle_fast_inputs && (key_changed || mouse_button_changed != 0 || mouse_moved || mouse_wheeled))
@@ -8773,6 +8815,8 @@ void ImGuiStackSizes::CompareWithCurrentState()
     // Window stacks
     // NOT checking: DC.ItemWidth, DC.TextWrapPos (per window) to allow user to conveniently push once and not pop (they are cleared on Begin)
     IM_ASSERT(SizeOfIDStack         == window->IDStack.Size     && "PushID/PopID or TreeNode/TreePop Mismatch!");
+    IM_ASSERT(0                     == window->DC.LayoutStack.Size && (!window->DC.LayoutStack.Size || window->DC.LayoutStack.back()->Type == ImGuiLayoutType_Horizontal) && "BeginHorizontal/EndHorizontal Mismatch!");
+    IM_ASSERT(0                     == window->DC.LayoutStack.Size && (!window->DC.LayoutStack.Size || window->DC.LayoutStack.back()->Type == ImGuiLayoutType_Vertical)   && "BeginVertical/EndVertical Mismatch!");
 
     // Global stacks
     // For color, style and font stacks there is an incentive to use Push/Begin/Pop/.../End patterns, so we relax our checks a little to allow them.
@@ -8829,30 +8873,54 @@ void ImGui::ItemSize(const ImVec2& size, float text_baseline_y)
     if (window->SkipItems)
         return;
 
-    // We increase the height in this function to accommodate for baseline offset.
-    // In theory we should be offsetting the starting position (window->DC.CursorPos), that will be the topic of a larger refactor,
-    // but since ItemSize() is not yet an API that moves the cursor (to handle e.g. wrapping) enlarging the height has the same effect.
-    const float offset_to_match_baseline_y = (text_baseline_y >= 0) ? ImMax(0.0f, window->DC.CurrLineTextBaseOffset - text_baseline_y) : 0.0f;
-    const float line_height = ImMax(window->DC.CurrLineSize.y, size.y + offset_to_match_baseline_y);
+    ImGuiLayoutType layout_type = window->DC.LayoutType;
+    if (window->DC.CurrentLayout)
+        layout_type = window->DC.CurrentLayout->Type;
 
-    // Always align ourselves on pixel boundaries
-    //if (g.IO.KeyAlt) window->DrawList->AddRect(window->DC.CursorPos, window->DC.CursorPos + ImVec2(size.x, line_height), IM_COL32(255,0,0,200)); // [DEBUG]
-    window->DC.CursorPosPrevLine.x = window->DC.CursorPos.x + size.x;
-    window->DC.CursorPosPrevLine.y = window->DC.CursorPos.y;
-    window->DC.CursorPos.x = IM_FLOOR(window->Pos.x + window->DC.Indent.x + window->DC.ColumnsOffset.x);    // Next line
-    window->DC.CursorPos.y = IM_FLOOR(window->DC.CursorPos.y + line_height + g.Style.ItemSpacing.y);        // Next line
-    window->DC.CursorMaxPos.x = ImMax(window->DC.CursorMaxPos.x, window->DC.CursorPosPrevLine.x);
-    window->DC.CursorMaxPos.y = ImMax(window->DC.CursorMaxPos.y, window->DC.CursorPos.y - g.Style.ItemSpacing.y);
-    //if (g.IO.KeyAlt) window->DrawList->AddCircle(window->DC.CursorMaxPos, 3.0f, IM_COL32(255,0,0,255), 4); // [DEBUG]
+    if (layout_type == ImGuiLayoutType_Vertical)
+    {
+        // We increase the height in this function to accommodate for baseline offset.
+        // In theory we should be offsetting the starting position (window->DC.CursorPos), that will be the topic of a larger refactor,
+        // but since ItemSize() is not yet an API that moves the cursor (to handle e.g. wrapping) enlarging the height has the same effect.
+        const float offset_to_match_baseline_y = (text_baseline_y >= 0) ? ImMax(0.0f, window->DC.CurrLineTextBaseOffset - text_baseline_y) : 0.0f;
+        const float line_height = ImMax(window->DC.CurrLineSize.y, size.y + offset_to_match_baseline_y);
 
-    window->DC.PrevLineSize.y = line_height;
-    window->DC.CurrLineSize.y = 0.0f;
-    window->DC.PrevLineTextBaseOffset = ImMax(window->DC.CurrLineTextBaseOffset, text_baseline_y);
-    window->DC.CurrLineTextBaseOffset = 0.0f;
+        // Always align ourselves on pixel boundaries
+        //if (g.IO.KeyAlt) window->DrawList->AddRect(window->DC.CursorPos, window->DC.CursorPos + ImVec2(size.x, line_height), IM_COL32(255,0,0,200)); // [DEBUG]
+        window->DC.CursorPosPrevLine.x = window->DC.CursorPos.x + size.x;
+        window->DC.CursorPosPrevLine.y = window->DC.CursorPos.y;
+        window->DC.CursorPos.x = IM_FLOOR(window->Pos.x + window->DC.Indent.x + window->DC.ColumnsOffset.x);    // Next line
+        window->DC.CursorPos.y = IM_FLOOR(window->DC.CursorPos.y + line_height + g.Style.ItemSpacing.y);        // Next line
+        window->DC.CursorMaxPos.x = ImMax(window->DC.CursorMaxPos.x, window->DC.CursorPosPrevLine.x);
+        window->DC.CursorMaxPos.y = ImMax(window->DC.CursorMaxPos.y, window->DC.CursorPos.y - g.Style.ItemSpacing.y);
+        //if (g.IO.KeyAlt) window->DrawList->AddCircle(window->DC.CursorMaxPos, 3.0f, IM_COL32(255,0,0,255), 4); // [DEBUG]
 
-    // Horizontal layout mode
-    if (window->DC.LayoutType == ImGuiLayoutType_Horizontal)
-        SameLine();
+        window->DC.PrevLineSize.x = 0.0f;
+        window->DC.PrevLineSize.y = line_height;
+        window->DC.CurrLineSize.y = 0.0f;
+        window->DC.PrevLineTextBaseOffset = ImMax(window->DC.CurrLineTextBaseOffset, text_baseline_y);
+        window->DC.CurrLineTextBaseOffset = 0.0f;
+    }
+    else
+    {
+        const float line_width = ImMax(window->DC.CurrLineSize.x, size.x);
+
+        // Always align ourselves on pixel boundaries
+        //if (g.IO.KeyAlt) window->DrawList->AddRect(window->DC.CursorPos, window->DC.CursorPos + ImVec2(size.x, line_height), IM_COL32(255,0,0,200)); // [DEBUG]
+        window->DC.CursorPosPrevLine.x = window->DC.CursorPos.x;
+        window->DC.CursorPosPrevLine.y = window->DC.CursorPos.y + size.y;
+        window->DC.CursorPos.x = IM_FLOOR(window->DC.CursorPos.x + line_width + g.Style.ItemSpacing.x);
+        window->DC.CursorPos.y = IM_FLOOR(window->DC.CursorPosPrevLine.y - size.y);
+        window->DC.CursorMaxPos.x = ImMax(window->DC.CursorMaxPos.x, window->DC.CursorPos.x - g.Style.ItemSpacing.x);
+        window->DC.CursorMaxPos.y = ImMax(window->DC.CursorMaxPos.y, window->DC.CursorPosPrevLine.y);
+        //if (g.IO.KeyAlt) window->DrawList->AddCircle(window->DC.CursorMaxPos, 3.0f, IM_COL32(255,0,0,255), 4); // [DEBUG]
+
+        window->DC.PrevLineSize.x = line_width;
+        window->DC.PrevLineSize.y = 0.0f;
+        window->DC.CurrLineSize.x = 0.0f;
+        window->DC.PrevLineTextBaseOffset = ImMax(window->DC.CurrLineTextBaseOffset, text_baseline_y);
+        window->DC.CurrLineTextBaseOffset = window->DC.PrevLineTextBaseOffset;
+    }
 }
 
 void ImGui::ItemSize(const ImRect& bb, float text_baseline_y)
@@ -8909,6 +8977,9 @@ bool ImGui::ItemAdd(const ImRect& bb, ImGuiID id, const ImRect* nav_bb_arg, ImGu
 #endif
     }
     g.NextItemData.Flags = ImGuiNextItemDataFlags_None;
+
+    if (window->DC.CurrentLayoutItem)
+        window->DC.CurrentLayoutItem->MeasuredBounds.Max = ImMax(window->DC.CurrentLayoutItem->MeasuredBounds.Max, bb.Max);
 
 #ifdef IMGUI_ENABLE_TEST_ENGINE
     if (id != 0)
@@ -9271,6 +9342,697 @@ void ImGui::EndGroup()
 
     g.GroupStack.pop_back();
     //window->DrawList->AddRect(group_bb.Min, group_bb.Max, IM_COL32(255,0,255,255));   // [Debug]
+}
+
+
+//-----------------------------------------------------------------------------
+// [SECTION] STACK LAYOUT
+//-----------------------------------------------------------------------------
+
+static ImGuiLayout* ImGui::FindLayout(ImGuiID id, ImGuiLayoutType type)
+{
+    IM_ASSERT(type == ImGuiLayoutType_Horizontal || type == ImGuiLayoutType_Vertical);
+
+    ImGuiWindow* window = GetCurrentWindow();
+    ImGuiLayout* layout = (ImGuiLayout*)window->DC.Layouts.GetVoidPtr(id);
+    if (!layout)
+        return NULL;
+
+    if (layout->Type != type)
+    {
+        layout->Type = type;
+        layout->MinimumSize = ImVec2(0.0f, 0.0f);
+        layout->Items.clear();
+    }
+
+    return layout;
+}
+
+static ImGuiLayout* ImGui::CreateNewLayout(ImGuiID id, ImGuiLayoutType type, ImVec2 size)
+{
+    IM_ASSERT(type == ImGuiLayoutType_Horizontal || type == ImGuiLayoutType_Vertical);
+
+    ImGuiWindow* window = GetCurrentWindow();
+
+    ImGuiLayout* layout = IM_NEW(ImGuiLayout)(id, type);
+    layout->Size = size;
+
+    window->DC.Layouts.SetVoidPtr(id, layout);
+
+    return layout;
+}
+
+static void ImGui::BeginLayout(ImGuiID id, ImGuiLayoutType type, ImVec2 size, float align)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+
+    PushID(id);
+
+    // Find or create
+    ImGuiLayout* layout = FindLayout(id, type);
+    if (!layout)
+        layout = CreateNewLayout(id, type, size);
+
+    layout->Live = true;
+
+    PushLayout(layout);
+
+    if (layout->Size.x != size.x || layout->Size.y != size.y)
+        layout->Size = size;
+
+    if (align < 0.0f)
+        layout->Align = -1.0f;
+    else
+        layout->Align = ImClamp(align, 0.0f, 1.0f);
+
+    // Start capture
+    layout->CurrentItemIndex = 0;
+
+    layout->CurrentSize.x = layout->Size.x > 0.0f ? layout->Size.x : layout->MinimumSize.x;
+    layout->CurrentSize.y = layout->Size.y > 0.0f ? layout->Size.y : layout->MinimumSize.y;
+
+    layout->StartPos = window->DC.CursorPos;
+    layout->StartCursorMaxPos = window->DC.CursorMaxPos;
+
+    if (type == ImGuiLayoutType_Vertical)
+    {
+        // Push empty item to recalculate cursor position.
+        PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 0.0f));
+        Dummy(ImVec2(0.0f, 0.0f));
+        PopStyleVar();
+
+        // Indent horizontal position to match edge of the layout.
+        layout->Indent = layout->StartPos.x - window->DC.CursorPos.x;
+        SignedIndent(layout->Indent);
+    }
+
+    BeginLayoutItem(*layout);
+}
+
+static void ImGui::EndLayout(ImGuiLayoutType type)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+    IM_ASSERT(window->DC.CurrentLayout);
+    IM_ASSERT(window->DC.CurrentLayout->Type == type);
+
+    ImGuiLayout* layout = window->DC.CurrentLayout;
+
+    EndLayoutItem(*layout);
+
+    if (layout->CurrentItemIndex < layout->Items.Size)
+        layout->Items.resize(layout->CurrentItemIndex);
+
+    if (layout->Type == ImGuiLayoutType_Vertical)
+        SignedIndent(-layout->Indent);
+
+    PopLayout(layout);
+
+    const bool auto_width  = layout->Size.x <= 0.0f;
+    const bool auto_height = layout->Size.y <= 0.0f;
+
+    ImVec2 new_size = layout->Size;
+    if (auto_width)
+        new_size.x = layout->CurrentSize.x;
+    if (auto_height)
+        new_size.y = layout->CurrentSize.y;
+
+    ImVec2 new_minimum_size = CalculateLayoutSize(*layout, true);
+
+    if (new_minimum_size.x != layout->MinimumSize.x || new_minimum_size.y != layout->MinimumSize.y)
+    {
+        layout->MinimumSize = new_minimum_size;
+
+        // Shrink
+        if (auto_width)
+            new_size.x = new_minimum_size.x;
+        if (auto_height)
+            new_size.y = new_minimum_size.y;
+    }
+
+    if (!auto_width)
+        new_size.x = layout->Size.x;
+    if (!auto_height)
+        new_size.y = layout->Size.y;
+
+    layout->CurrentSize = new_size;
+
+    ImVec2 measured_size = new_size;
+    if ((auto_width || auto_height) && layout->Parent)
+    {
+        if (layout->Type == ImGuiLayoutType_Horizontal && auto_width && layout->Parent->CurrentSize.x > 0)
+            layout->CurrentSize.x = layout->Parent->CurrentSize.x;
+        else if (layout->Type == ImGuiLayoutType_Vertical && auto_height && layout->Parent->CurrentSize.y > 0)
+            layout->CurrentSize.y = layout->Parent->CurrentSize.y;
+
+        BalanceLayoutSprings(*layout);
+
+        measured_size = layout->CurrentSize;
+    }
+
+    layout->CurrentSize = new_size;
+
+    PopID();
+
+    ImVec2 current_layout_item_max = ImVec2(0.0f, 0.0f);
+    if (window->DC.CurrentLayoutItem)
+        current_layout_item_max = ImMax(window->DC.CurrentLayoutItem->MeasuredBounds.Max, layout->StartPos + new_size);
+
+    window->DC.CursorPos    = layout->StartPos;
+    window->DC.CursorMaxPos = layout->StartCursorMaxPos;
+    ItemSize(new_size);
+    ItemAdd(ImRect(layout->StartPos, layout->StartPos + measured_size), 0);
+
+    if (window->DC.CurrentLayoutItem)
+        window->DC.CurrentLayoutItem->MeasuredBounds.Max = current_layout_item_max;
+
+    if (layout->Parent == NULL)
+        BalanceChildLayouts(*layout);
+
+    //window->DrawList->AddRect(layout->StartPos, layout->StartPos + measured_size, IM_COL32(0,255,0,255));           // [DEBUG]
+    //window->DrawList->AddRect(window->DC.LastItemRect.Min, window->DC.LastItemRect.Max, IM_COL32(255,255,0,255));   // [DEBUG]
+}
+
+static ImVec2 ImGui::CalculateLayoutSize(ImGuiLayout& layout, bool collapse_springs)
+{
+    ImVec2 bounds = ImVec2(0.0f, 0.0f);
+
+    if (layout.Type == ImGuiLayoutType_Vertical)
+    {
+        for (int i = 0; i < layout.Items.Size; i++)
+        {
+            ImGuiLayoutItem& item = layout.Items[i];
+            ImVec2 item_size = item.MeasuredBounds.GetSize();
+
+            if (item.Type == ImGuiLayoutItemType_Item)
+            {
+                bounds.x  = ImMax(bounds.x, item_size.x);
+                bounds.y += item_size.y;
+            }
+            else
+            {
+                bounds.y += ImFloor(item.SpringSpacing);
+
+                if (!collapse_springs)
+                    bounds.y += item.SpringSize;
+            }
+        }
+    }
+    else
+    {
+        for (int i = 0; i < layout.Items.Size; i++)
+        {
+            ImGuiLayoutItem& item = layout.Items[i];
+            ImVec2 item_size = item.MeasuredBounds.GetSize();
+
+            if (item.Type == ImGuiLayoutItemType_Item)
+            {
+                bounds.x += item_size.x;
+                bounds.y  = ImMax(bounds.y, item_size.y);
+            }
+            else
+            {
+                bounds.x += ImFloor(item.SpringSpacing);
+
+                if (!collapse_springs)
+                    bounds.x += item.SpringSize;
+            }
+        }
+    }
+
+    return bounds;
+}
+
+static void ImGui::PushLayout(ImGuiLayout* layout)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+
+    if (layout)
+    {
+        layout->Parent = window->DC.CurrentLayout;
+        if (layout->Parent != NULL)
+            layout->ParentItemIndex = layout->Parent->CurrentItemIndex;
+        if (window->DC.CurrentLayout)
+        {
+            layout->NextSibling = window->DC.CurrentLayout->FirstChild;
+            layout->FirstChild  = NULL;
+            window->DC.CurrentLayout->FirstChild = layout;
+        }
+        else
+        {
+            layout->NextSibling = NULL;
+            layout->FirstChild  = NULL;
+        }
+    }
+
+    window->DC.LayoutStack.push_back(layout);
+    window->DC.CurrentLayout = layout;
+    window->DC.CurrentLayoutItem = NULL;
+}
+
+static void ImGui::PopLayout(ImGuiLayout* layout)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+
+    IM_ASSERT(!window->DC.LayoutStack.empty());
+    IM_ASSERT(window->DC.LayoutStack.back() == layout);
+
+    window->DC.LayoutStack.pop_back();
+
+    if (!window->DC.LayoutStack.empty())
+    {
+        window->DC.CurrentLayout = window->DC.LayoutStack.back();
+        window->DC.CurrentLayoutItem = &window->DC.CurrentLayout->Items[window->DC.CurrentLayout->CurrentItemIndex];
+    }
+    else
+    {
+        window->DC.CurrentLayout = NULL;
+        window->DC.CurrentLayoutItem = NULL;
+    }
+}
+
+static void ImGui::BalanceLayoutSprings(ImGuiLayout& layout)
+{
+    // Accumulate amount of occupied space and springs weights
+    float total_spring_weight = 0.0f;
+
+    int last_spring_item_index = -1;
+    for (int i = 0; i < layout.Items.Size; i++)
+    {
+        ImGuiLayoutItem& item = layout.Items[i];
+        if (item.Type == ImGuiLayoutItemType_Spring)
+        {
+            total_spring_weight += item.SpringWeight;
+            last_spring_item_index = i;
+        }
+    }
+
+    // Determine occupied space and available space depending on layout type
+    const bool  is_horizontal   = (layout.Type == ImGuiLayoutType_Horizontal);
+    const bool  is_auto_sized   = ((is_horizontal ? layout.Size.x : layout.Size.y) <= 0.0f) && (layout.Parent == NULL);
+    const float occupied_space  = is_horizontal ? layout.MinimumSize.x : layout.MinimumSize.y;
+    const float available_space = is_auto_sized ? occupied_space : (is_horizontal ? layout.CurrentSize.x : layout.CurrentSize.y);
+    const float free_space      = ImMax(available_space - occupied_space, 0.0f);
+
+    float span_start     = 0.0f;
+    float current_weight = 0.0f;
+    for (int i = 0; i < layout.Items.Size; i++)
+    {
+        ImGuiLayoutItem& item = layout.Items[i];
+        if (item.Type != ImGuiLayoutItemType_Spring)
+            continue;
+
+        float last_spring_size = item.SpringSize;
+
+        if (free_space > 0.0f && total_spring_weight > 0.0f)
+        {
+            float next_weight = current_weight + item.SpringWeight;
+            float span_end    = ImFloor((i == last_spring_item_index) ? free_space : (free_space * next_weight / total_spring_weight));
+            float spring_size = span_end - span_start;
+            item.SpringSize   = spring_size;
+            span_start        = span_end;
+            current_weight    = next_weight;
+        }
+        else
+        {
+            item.SpringSize = 0.0f;
+        }
+
+        // If spring changed its size, fix positioning of following items to avoid one frame visual bugs.
+        if (last_spring_size != item.SpringSize)
+        {
+            float difference = item.SpringSize - last_spring_size;
+
+            ImVec2 offset = is_horizontal ? ImVec2(difference, 0.0f) : ImVec2(0.0f, difference);
+
+            item.MeasuredBounds.Max += offset;
+
+            for (int j = i + 1; j < layout.Items.Size; j++)
+            {
+                ImGuiLayoutItem& translated_item = layout.Items[j];
+
+                TranslateLayoutItem(translated_item, offset);
+
+                translated_item.MeasuredBounds.Min += offset;
+                translated_item.MeasuredBounds.Max += offset;
+            }
+        }
+    }
+}
+
+static ImVec2 ImGui::BalanceLayoutItemAlignment(ImGuiLayout& layout, ImGuiLayoutItem& item)
+{
+    // Fixup item alignment if necessary.
+    ImVec2 position_correction = ImVec2(0.0f, 0.0f);
+    if (item.CurrentAlign > 0.0f)
+    {
+        float item_align_offset = CalculateLayoutItemAlignmentOffset(layout, item);
+        if (item.CurrentAlignOffset != item_align_offset)
+        {
+            float offset = item_align_offset - item.CurrentAlignOffset;
+
+            if (layout.Type == ImGuiLayoutType_Horizontal)
+                position_correction.y = offset;
+            else
+                position_correction.x = offset;
+
+            TranslateLayoutItem(item, position_correction);
+
+            item.CurrentAlignOffset = item_align_offset;
+        }
+    }
+
+    return position_correction;
+}
+
+static void ImGui::BalanceLayoutItemsAlignment(ImGuiLayout& layout)
+{
+    for (int i = 0; i < layout.Items.Size; ++i)
+    {
+        ImGuiLayoutItem& item = layout.Items[i];
+        BalanceLayoutItemAlignment(layout, item);
+    }
+}
+
+static bool HasAnyNonZeroSpring(ImGuiLayout& layout)
+{
+    for (int i = 0; i < layout.Items.Size; ++i)
+    {
+        ImGuiLayoutItem& item = layout.Items[i];
+        if (item.Type != ImGuiLayoutItemType_Spring)
+            continue;
+        if (item.SpringWeight > 0)
+            return true;
+    }
+    return false;
+}
+
+static void ImGui::BalanceChildLayouts(ImGuiLayout& layout)
+{
+    for (ImGuiLayout* child = layout.FirstChild; child != NULL; child = child->NextSibling)
+    {
+        //ImVec2 child_layout_size = child->CurrentSize;
+
+        // Propagate layout size down to child layouts.
+        //
+        // TODO: Distribution assume inner layout is only
+        //       element inside parent item and assigns
+        //       all available space to it.
+        //
+        //       Investigate how to split space between
+        //       adjacent layouts.
+        //
+        //       Investigate how to measure non-layout items
+        //       to treat them as fixed size blocks.
+        //
+        if (child->Type == ImGuiLayoutType_Horizontal && child->Size.x <= 0.0f)
+            child->CurrentSize.x = layout.CurrentSize.x;
+        else if (child->Type == ImGuiLayoutType_Vertical && child->Size.y <= 0.0f)
+            child->CurrentSize.y = layout.CurrentSize.y;
+
+        BalanceChildLayouts(*child);
+
+        //child->CurrentSize = child_layout_size;
+
+        if (HasAnyNonZeroSpring(*child))
+        {
+            // Expand item measured bounds to make alignment correct.
+            ImGuiLayoutItem& item = layout.Items[child->ParentItemIndex];
+
+            if (child->Type == ImGuiLayoutType_Horizontal && child->Size.x <= 0.0f)
+                item.MeasuredBounds.Max.x = ImMax(item.MeasuredBounds.Max.x, item.MeasuredBounds.Min.x + layout.CurrentSize.x);
+            else if (child->Type == ImGuiLayoutType_Vertical && child->Size.y <= 0.0f)
+                item.MeasuredBounds.Max.y = ImMax(item.MeasuredBounds.Max.y, item.MeasuredBounds.Min.y + layout.CurrentSize.y);
+        }
+    }
+
+    BalanceLayoutSprings(layout);
+    BalanceLayoutItemsAlignment(layout);
+}
+
+static ImGuiLayoutItem* ImGui::GenerateLayoutItem(ImGuiLayout& layout, ImGuiLayoutItemType type)
+{
+    ImGuiContext& g = *GImGui;
+    IM_ASSERT(layout.CurrentItemIndex <= layout.Items.Size);
+
+    if (layout.CurrentItemIndex < layout.Items.Size)
+    {
+        ImGuiLayoutItem& item = layout.Items[layout.CurrentItemIndex];
+        if (item.Type != type)
+            item = ImGuiLayoutItem(type);
+    }
+    else
+    {
+        layout.Items.push_back(ImGuiLayoutItem(type));
+    }
+
+    g.CurrentWindow->DC.CurrentLayoutItem = &layout.Items[layout.CurrentItemIndex];
+
+    return &layout.Items[layout.CurrentItemIndex];
+}
+
+// Calculate how many pixels from top/left layout edge item need to be moved to match
+// layout alignment.
+static float ImGui::CalculateLayoutItemAlignmentOffset(ImGuiLayout& layout, ImGuiLayoutItem& item)
+{
+    if (item.CurrentAlign <= 0.0f)
+        return 0.0f;
+
+    ImVec2 item_size = item.MeasuredBounds.GetSize();
+
+    float layout_extent = (layout.Type == ImGuiLayoutType_Horizontal) ? layout.CurrentSize.y : layout.CurrentSize.x;
+    float item_extent   = (layout.Type == ImGuiLayoutType_Horizontal) ? item_size.y : item_size.x;
+
+    if (item_extent <= 0/* || layout_extent <= item_extent*/)
+        return 0.0f;
+
+    float align_offset = ImFloor(item.CurrentAlign * (layout_extent - item_extent));
+
+    return align_offset;
+}
+
+static void ImGui::TranslateLayoutItem(ImGuiLayoutItem& item, const ImVec2& offset)
+{
+    if ((offset.x == 0.0f && offset.y == 0.0f) || (item.VertexIndexBegin == item.VertexIndexEnd))
+        return;
+
+    //IMGUI_DEBUG_LOG("TranslateLayoutItem by %f,%f\n", offset.x, offset.y);
+    ImDrawList* draw_list = GetWindowDrawList();
+
+    ImDrawVert* begin = draw_list->VtxBuffer.Data + item.VertexIndexBegin;
+    ImDrawVert* end   = draw_list->VtxBuffer.Data + item.VertexIndexEnd;
+
+    for (ImDrawVert* vtx = begin; vtx < end; ++vtx)
+    {
+        vtx->pos.x += offset.x;
+        vtx->pos.y += offset.y;
+    }
+}
+
+static void ImGui::SignedIndent(float indent)
+{
+    if (indent > 0.0f)
+        Indent(indent);
+    else if (indent < 0.0f)
+        Unindent(-indent);
+}
+
+static void ImGui::BeginLayoutItem(ImGuiLayout& layout)
+{
+    ImGuiContext& g = *GImGui;
+    ImGuiWindow* window = g.CurrentWindow;
+    ImGuiLayoutItem& item = *GenerateLayoutItem(layout, ImGuiLayoutItemType_Item);
+
+    item.CurrentAlign = layout.Align;
+    if (item.CurrentAlign < 0.0f)
+        item.CurrentAlign = ImClamp(g.Style.LayoutAlign, 0.0f, 1.0f);
+
+    // Align item according to data from previous frame.
+    // If layout changes in current frame alignment will
+    // be corrected in EndLayout() to it visualy coherent.
+    item.CurrentAlignOffset = CalculateLayoutItemAlignmentOffset(layout, item);
+    if (item.CurrentAlign > 0.0f)
+    {
+        if (layout.Type == ImGuiLayoutType_Horizontal)
+        {
+            window->DC.CursorPos.y += item.CurrentAlignOffset;
+        }
+        else
+        {
+            float new_position = window->DC.CursorPos.x + item.CurrentAlignOffset;
+
+            // Make placement behave like in horizontal case when next
+            // widget is placed at very same Y position. This indent
+            // make sure for vertical layout placed widgets has same X position.
+            SignedIndent(item.CurrentAlignOffset);
+
+            window->DC.CursorPos.x = new_position;
+        }
+    }
+
+    item.MeasuredBounds.Min = item.MeasuredBounds.Max = window->DC.CursorPos;
+    item.VertexIndexBegin = item.VertexIndexEnd = window->DrawList->_VtxCurrentIdx;
+}
+
+static void ImGui::EndLayoutItem(ImGuiLayout& layout)
+{
+    ImGuiContext& g = *GImGui;
+    ImGuiWindow* window = g.CurrentWindow;
+    IM_ASSERT(layout.CurrentItemIndex < layout.Items.Size);
+
+    ImGuiLayoutItem& item = layout.Items[layout.CurrentItemIndex];
+
+    ImDrawList* draw_list = window->DrawList;
+    item.VertexIndexEnd = draw_list->_VtxCurrentIdx;
+
+    if (item.CurrentAlign > 0.0f && layout.Type == ImGuiLayoutType_Vertical)
+        SignedIndent(-item.CurrentAlignOffset);
+
+    // Fixup item alignment in case item size changed in current frame.
+    ImVec2 position_correction = BalanceLayoutItemAlignment(layout, item);
+
+    item.MeasuredBounds.Min += position_correction;
+    item.MeasuredBounds.Max += position_correction;
+
+    if (layout.Type == ImGuiLayoutType_Horizontal)
+        window->DC.CursorPos.y = layout.StartPos.y;
+    else
+        window->DC.CursorPos.x = layout.StartPos.x;
+
+    layout.CurrentItemIndex++;
+}
+
+static void ImGui::AddLayoutSpring(ImGuiLayout& layout, float weight, float spacing)
+{
+    ImGuiContext& g = *GImGui;
+    ImGuiWindow* window = g.CurrentWindow;
+    ImGuiLayoutItem* previous_item = &layout.Items[layout.CurrentItemIndex];
+
+    // Undo item padding, spring should consume all space between items.
+    if (layout.Type == ImGuiLayoutType_Horizontal)
+        window->DC.CursorPos.x = previous_item->MeasuredBounds.Max.x;
+    else
+        window->DC.CursorPos.y = previous_item->MeasuredBounds.Max.y;
+
+    previous_item = NULL; // may be invalid after call to GenerateLayoutItem()
+
+    EndLayoutItem(layout);
+
+    ImGuiLayoutItem* spring_item = GenerateLayoutItem(layout, ImGuiLayoutItemType_Spring);
+
+    spring_item->MeasuredBounds.Min = spring_item->MeasuredBounds.Max = window->DC.CursorPos;
+
+    if (weight < 0.0f)
+        weight = 0.0f;
+
+    if (spring_item->SpringWeight != weight)
+        spring_item->SpringWeight = weight;
+
+    if (spacing < 0.0f)
+    {
+        ImVec2 style_spacing = g.Style.ItemSpacing;
+        if (layout.Type == ImGuiLayoutType_Horizontal)
+            spacing = style_spacing.x;
+        else
+            spacing = style_spacing.y;
+    }
+
+    if (spring_item->SpringSpacing != spacing)
+        spring_item->SpringSpacing = spacing;
+
+    if (spring_item->SpringSize > 0.0f || spacing > 0.0f)
+    {
+        ImVec2 spring_size, spring_spacing;
+        if (layout.Type == ImGuiLayoutType_Horizontal)
+        {
+            spring_spacing = ImVec2(0.0f, g.Style.ItemSpacing.y);
+            spring_size    = ImVec2(spacing + spring_item->SpringSize, layout.CurrentSize.y);
+        }
+        else
+        {
+            spring_spacing = ImVec2(g.Style.ItemSpacing.x, 0.0f);
+            spring_size    = ImVec2(layout.CurrentSize.x, spacing + spring_item->SpringSize);
+        }
+
+        PushStyleVar(ImGuiStyleVar_ItemSpacing, ImFloor(spring_spacing));
+        Dummy(ImFloor(spring_size));
+        PopStyleVar();
+    }
+
+    layout.CurrentItemIndex++;
+
+    BeginLayoutItem(layout);
+}
+
+void ImGui::BeginHorizontal(const char* str_id, const ImVec2& size/* = ImVec2(0, 0)*/, float align/* = -1*/)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+    BeginLayout(window->GetID(str_id), ImGuiLayoutType_Horizontal, size, align);
+}
+
+void ImGui::BeginHorizontal(const void* ptr_id, const ImVec2& size/* = ImVec2(0, 0)*/, float align/* = -1*/)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+    BeginLayout(window->GetID(ptr_id), ImGuiLayoutType_Horizontal, size, align);
+}
+
+void ImGui::BeginHorizontal(int id, const ImVec2& size/* = ImVec2(0, 0)*/, float align/* = -1*/)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+    BeginLayout(window->GetID((void*)(intptr_t)id), ImGuiLayoutType_Horizontal, size, align);
+}
+
+void ImGui::EndHorizontal()
+{
+    EndLayout(ImGuiLayoutType_Horizontal);
+}
+
+void ImGui::BeginVertical(const char* str_id, const ImVec2& size/* = ImVec2(0, 0)*/, float align/* = -1*/)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+    BeginLayout(window->GetID(str_id), ImGuiLayoutType_Vertical, size, align);
+}
+
+void ImGui::BeginVertical(const void* ptr_id, const ImVec2& size/* = ImVec2(0, 0)*/, float align/* = -1*/)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+    BeginLayout(window->GetID(ptr_id), ImGuiLayoutType_Vertical, size, align);
+}
+
+void ImGui::BeginVertical(int id, const ImVec2& size/* = ImVec2(0, 0)*/, float align/* = -1*/)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+    BeginLayout(window->GetID((void*)(intptr_t)id), ImGuiLayoutType_Vertical, size, align);
+}
+
+void ImGui::EndVertical()
+{
+    EndLayout(ImGuiLayoutType_Vertical);
+}
+
+// Inserts spring separator in layout
+//      weight <= 0     : spring will always have zero size
+//      weight > 0      : power of current spring
+//      spacing < 0     : use default spacing if pos_x == 0, no spacing if pos_x != 0
+//      spacing >= 0    : enforce spacing amount
+void ImGui::Spring(float weight/* = 1.0f*/, float spacing/* = -1.0f*/)
+{
+    ImGuiWindow* window = GetCurrentWindow();
+    IM_ASSERT(window->DC.CurrentLayout);
+
+    AddLayoutSpring(*window->DC.CurrentLayout, weight, spacing);
+}
+
+void ImGui::SuspendLayout()
+{
+    PushLayout(NULL);
+}
+
+void ImGui::ResumeLayout()
+{
+    ImGuiWindow* window = GetCurrentWindow();
+    IM_ASSERT(!window->DC.CurrentLayout);
+    IM_ASSERT(!window->DC.LayoutStack.empty());
+    PopLayout(NULL);
 }
 
 
@@ -11446,7 +12208,7 @@ static void ImGui::NavUpdateWindowing()
     // - Testing that only Alt is tested prevents Alt+Shift or AltGR from toggling menu layer.
     // - AltGR is normally Alt+Ctrl but we can't reliably detect it (not all backends/systems/layout emit it as Alt+Ctrl). But even on keyboards without AltGR we don't want Alt+Ctrl to open menu anyway.
 	const bool nav_keyboard_active = (io.ConfigFlags & ImGuiConfigFlags_NavEnableKeyboard) != 0;
-    if (nav_keyboard_active && IsKeyPressed(ImGuiKey_ModAlt))
+    if (nav_keyboard_active && io.KeyMods == ImGuiKeyModFlags_Alt && (io.KeyModsPrev & ImGuiKeyModFlags_Alt) == 0)
     {
         g.NavWindowingToggleLayer = true;
         g.NavInputSource = ImGuiInputSource_Keyboard;
@@ -11459,12 +12221,13 @@ static void ImGui::NavUpdateWindowing()
             g.NavWindowingToggleLayer = false;
 
         // Apply layer toggle on release
+        // Important: we don't assume that Alt was previously held in order to handle loss of focus when backend calls io.AddFocusEvent(false)
         // Important: as before version <18314 we lacked an explicit IO event for focus gain/loss, we also compare mouse validity to detect old backends clearing mouse pos on focus loss.
-        if (IsKeyReleased(ImGuiKey_ModAlt) && g.NavWindowingToggleLayer)
+        if (!(io.KeyMods & ImGuiKeyModFlags_Alt) && (io.KeyModsPrev & ImGuiKeyModFlags_Alt) && g.NavWindowingToggleLayer)
             if (g.ActiveId == 0 || g.ActiveIdAllowOverlap)
                 if (IsMousePosValid(&io.MousePos) == IsMousePosValid(&io.MousePosPrev))
                     apply_toggle_layer = true;
-        if (!IsKeyDown(ImGuiKey_ModAlt))
+        if (!io.KeyAlt)
             g.NavWindowingToggleLayer = false;
     }
 
@@ -17949,7 +18712,7 @@ void ImGui::ShowMetricsWindow(bool* p_open)
         Text("ActiveIdWindow: '%s'", g.ActiveIdWindow ? g.ActiveIdWindow->Name : "NULL");
 
         int active_id_using_key_input_count = 0;
-        for (int n = ImGuiKey_NamedKey_BEGIN; n < ImGuiKey_NamedKey_END; n++)
+        for (int n = 0; n < ImGuiKey_NamedKey_COUNT; n++)
             active_id_using_key_input_count += g.ActiveIdUsingKeyInputMask[n] ? 1 : 0;
         Text("ActiveIdUsing: Wheel: %d, NavDirMask: %X, NavInputMask: %X, KeyInputMask: %d key(s)", g.ActiveIdUsingMouseWheel, g.ActiveIdUsingNavDirMask, g.ActiveIdUsingNavInputMask, active_id_using_key_input_count);
         Text("HoveredId: 0x%08X (%.2f sec), AllowOverlap: %d", g.HoveredIdPreviousFrame, g.HoveredIdTimer, g.HoveredIdAllowOverlap); // Not displaying g.HoveredId as it is update mid-frame
@@ -18667,44 +19430,27 @@ void ImGui::DebugHookIdInfo(ImGuiID id, ImGuiDataType data_type, const void* dat
     ImGuiStackLevelInfo* info = &tool->Results[tool->StackLevel];
     IM_ASSERT(info->ID == id && info->QueryFrameCount > 0);
 
+    int data_len;
     switch (data_type)
     {
     case ImGuiDataType_S32:
         ImFormatString(info->Desc, IM_ARRAYSIZE(info->Desc), "%d", (int)(intptr_t)data_id);
         break;
     case ImGuiDataType_String:
-        ImFormatString(info->Desc, IM_ARRAYSIZE(info->Desc), "%.*s", data_id_end ? (int)((const char*)data_id_end - (const char*)data_id) : (int)strlen((const char*)data_id), (const char*)data_id);
+        data_len = data_id_end ? (int)((const char*)data_id_end - (const char*)data_id) : (int)strlen((const char*)data_id);
+        ImFormatString(info->Desc, IM_ARRAYSIZE(info->Desc), "\"%.*s\"", data_len, (const char*)data_id);
         break;
     case ImGuiDataType_Pointer:
         ImFormatString(info->Desc, IM_ARRAYSIZE(info->Desc), "(void*)0x%p", data_id);
         break;
     case ImGuiDataType_ID:
-        if (info->Desc[0] != 0) // PushOverrideID() is often used to avoid hashing twice, which would lead to 2 calls to DebugHookIdInfo(). We prioritize the first one.
-            return;
-        ImFormatString(info->Desc, IM_ARRAYSIZE(info->Desc), "0x%08X [override]", id);
+        if (info->Desc[0] == 0) // PushOverrideID() is often used to avoid hashing twice, which would lead to 2 calls to DebugHookIdInfo(). We prioritize the first one.
+            ImFormatString(info->Desc, IM_ARRAYSIZE(info->Desc), "0x%08X [override]", id);
         break;
     default:
         IM_ASSERT(0);
     }
     info->QuerySuccess = true;
-    info->DataType = data_type;
-}
-
-static int StackToolFormatLevelInfo(ImGuiStackTool* tool, int n, bool format_for_ui, char* buf, size_t buf_size)
-{
-    ImGuiStackLevelInfo* info = &tool->Results[n];
-    ImGuiWindow* window = (info->Desc[0] == 0 && n == 0) ? ImGui::FindWindowByID(info->ID) : NULL;
-    if (window)                                                                 // Source: window name (because the root ID don't call GetID() and so doesn't get hooked)
-        return ImFormatString(buf, buf_size, format_for_ui ? "\"%s\" [window]" : "%s", window->Name);
-    if (info->QuerySuccess)                                                     // Source: GetID() hooks (prioritize over ItemInfo() because we frequently use patterns like: PushID(str), Button("") where they both have same id)
-        return ImFormatString(buf, buf_size, (format_for_ui && info->DataType == ImGuiDataType_String) ? "\"%s\"" : "%s", info->Desc);
-    if (tool->StackLevel < tool->Results.Size)                                  // Only start using fallback below when all queries are done, so during queries we don't flickering ??? markers.
-        return (*buf = 0);
-#ifdef IMGUI_ENABLE_TEST_ENGINE
-    if (const char* label = ImGuiTestEngine_FindItemDebugLabel(GImGui, info->ID))   // Source: ImGuiTestEngine's ItemInfo()
-        return ImFormatString(buf, buf_size, format_for_ui ? "??? \"%s\"" : "%s", label);
-#endif
-    return ImFormatString(buf, buf_size, "???");
 }
 
 // Stack Tool: Display UI
@@ -18720,7 +19466,6 @@ void ImGui::ShowStackToolWindow(bool* p_open)
     }
 
     // Display hovered/active status
-    ImGuiStackTool* tool = &g.DebugStackTool;
     const ImGuiID hovered_id = g.HoveredIdPreviousFrame;
     const ImGuiID active_id = g.ActiveId;
 #ifdef IMGUI_ENABLE_TEST_ENGINE
@@ -18731,33 +19476,8 @@ void ImGui::ShowStackToolWindow(bool* p_open)
     SameLine();
     MetricsHelpMarker("Hover an item with the mouse to display elements of the ID Stack leading to the item's final ID.\nEach level of the stack correspond to a PushID() call.\nAll levels of the stack are hashed together to make the final ID of a widget (ID displayed at the bottom level of the stack).\nRead FAQ entry about the ID stack for details.");
 
-    // CTRL+C to copy path
-    const float time_since_copy = (float)g.Time - tool->CopyToClipboardLastTime;
-    Checkbox("Ctrl+C: copy path to clipboard", &tool->CopyToClipboardOnCtrlC);
-    SameLine();
-    TextColored((time_since_copy >= 0.0f && time_since_copy < 0.75f && ImFmod(time_since_copy, 0.25f) < 0.25f * 0.5f) ? ImVec4(1.f, 1.f, 0.3f, 1.f) : ImVec4(), "*COPIED*");
-    if (tool->CopyToClipboardOnCtrlC && IsKeyDown(ImGuiKey_ModCtrl) && IsKeyPressed(ImGuiKey_C))
-    {
-        tool->CopyToClipboardLastTime = (float)g.Time;
-        char* p = g.TempBuffer;
-        char* p_end = p + IM_ARRAYSIZE(g.TempBuffer);
-        for (int stack_n = 0; stack_n < tool->Results.Size && p + 3 < p_end; stack_n++)
-        {
-            *p++ = '/';
-            char level_desc[256];
-            StackToolFormatLevelInfo(tool, stack_n, false, level_desc, IM_ARRAYSIZE(level_desc));
-            for (int n = 0; level_desc[n] && p + 2 < p_end; n++)
-            {
-                if (level_desc[n] == '/')
-                    *p++ = '\\';
-                *p++ = level_desc[n];
-            }
-        }
-        *p = '\0';
-        SetClipboardText(g.TempBuffer);
-    }
-
     // Display decorated stack
+    ImGuiStackTool* tool = &g.DebugStackTool;
     tool->LastActiveFrame = g.FrameCount;
     if (tool->Results.Size > 0 && BeginTable("##table", 3, ImGuiTableFlags_Borders))
     {
@@ -18771,9 +19491,23 @@ void ImGui::ShowStackToolWindow(bool* p_open)
             ImGuiStackLevelInfo* info = &tool->Results[n];
             TableNextColumn();
             Text("0x%08X", (n > 0) ? tool->Results[n - 1].ID : 0);
+
             TableNextColumn();
-            StackToolFormatLevelInfo(tool, n, true, g.TempBuffer, IM_ARRAYSIZE(g.TempBuffer));
-            TextUnformatted(g.TempBuffer);
+            ImGuiWindow* window = (info->Desc[0] == 0 && n == 0) ? FindWindowByID(info->ID) : NULL;
+            if (window)                                         // Source: window name (because the root ID don't call GetID() and so doesn't get hooked)
+                Text("\"%s\" [window]", window->Name);
+            else if (info->QuerySuccess)                        // Source: GetID() hooks (prioritize over ItemInfo() because we frequently use patterns like: PushID(str), Button("") where they both have same id)
+                TextUnformatted(info->Desc);
+            else if (tool->StackLevel >= tool->Results.Size)    // Only start using fallback below when all queries are done, so during queries we don't flickering ??? markers.
+            {
+#ifdef IMGUI_ENABLE_TEST_ENGINE
+                if (const char* label = ImGuiTestEngine_FindItemDebugLabel(&g, info->ID))    // Source: ImGuiTestEngine's ItemInfo()
+                    Text("??? \"%s\"", label);
+                else
+#endif
+                    TextUnformatted("???");
+            }
+
             TableNextColumn();
             Text("0x%08X", info->ID);
             if (n == tool->Results.Size - 1)

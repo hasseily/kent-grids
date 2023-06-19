@@ -1,4 +1,4 @@
-// dear imgui, v1.88 WIP
+// dear imgui, v1.87
 // (widgets code)
 
 /*
@@ -82,7 +82,6 @@ Index of this file:
 #pragma GCC diagnostic ignored "-Wpragmas"                          // warning: unknown option after '#pragma GCC diagnostic' kind
 #pragma GCC diagnostic ignored "-Wformat-nonliteral"                // warning: format not a string literal, format string not checked
 #pragma GCC diagnostic ignored "-Wclass-memaccess"                  // [__GNUC__ >= 8] warning: 'memset/memcpy' clearing/writing an object of type 'xxxx' with no trivial copy-assignment; use assignment or value-initialization instead
-#pragma GCC diagnostic ignored "-Wdeprecated-enum-enum-conversion"  // warning: bitwise operation between different enumeration types ('XXXFlags_' and 'XXXFlagsPrivate_') is deprecated
 #endif
 
 //-------------------------------------------------------------------------
@@ -1040,6 +1039,8 @@ bool ImGui::ImageButtonEx(ImGuiID id, ImTextureID texture_id, const ImVec2& size
     ImGuiWindow* window = GetCurrentWindow();
     if (window->SkipItems)
         return false;
+
+    ImGui::KeepAliveID(id);
 
     const ImRect bb(window->DC.CursorPos, window->DC.CursorPos + size + padding * 2);
     ItemSize(bb);
@@ -6938,7 +6939,7 @@ bool ImGui::BeginMenuEx(const char* label, const char* icon, bool enabled)
     if (!enabled)
         EndDisabled();
 
-    const bool hovered = (g.HoveredId == id) && enabled && !g.NavDisableMouseHover;
+    const bool hovered = (g.HoveredId == id) && enabled;
     if (menuset_is_open)
         g.NavWindow = backed_nav_window;
 

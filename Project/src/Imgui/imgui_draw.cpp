@@ -1,4 +1,4 @@
-// dear imgui, v1.88 WIP
+// dear imgui, v1.87
 // (drawing and font code)
 
 /*
@@ -463,7 +463,12 @@ void ImDrawList::AddDrawCmd()
     draw_cmd.VtxOffset = _CmdHeader.VtxOffset;
     draw_cmd.IdxOffset = IdxBuffer.Size;
 
-    IM_ASSERT(draw_cmd.ClipRect.x <= draw_cmd.ClipRect.z && draw_cmd.ClipRect.y <= draw_cmd.ClipRect.w);
+    // NOTE(Yan): Not sure why this happens but sometimes x > z which causes a crash in vkCmdSetScissor later on
+    // IM_ASSERT(draw_cmd.ClipRect.x <= draw_cmd.ClipRect.z && draw_cmd.ClipRect.y <= draw_cmd.ClipRect.w);
+    if (draw_cmd.ClipRect.x > draw_cmd.ClipRect.z)
+        draw_cmd.ClipRect.z = draw_cmd.ClipRect.x + 1;
+    if (draw_cmd.ClipRect.y > draw_cmd.ClipRect.y)
+        draw_cmd.ClipRect.w = draw_cmd.ClipRect.w + 1;
     CmdBuffer.push_back(draw_cmd);
 }
 
@@ -1214,8 +1219,8 @@ void ImDrawList::PathArcTo(const ImVec2& center, float radius, float a_min, floa
 
         const float a_min_segment_angle = a_min_sample * IM_PI * 2.0f / IM_DRAWLIST_ARCFAST_SAMPLE_MAX;
         const float a_max_segment_angle = a_max_sample * IM_PI * 2.0f / IM_DRAWLIST_ARCFAST_SAMPLE_MAX;
-        const bool a_emit_start = ImAbs(a_min_segment_angle - a_min) >= 1e-5f;
-        const bool a_emit_end = ImAbs(a_max - a_max_segment_angle) >= 1e-5f;
+        const bool a_emit_start = (a_min_segment_angle - a_min) != 0.0f;
+        const bool a_emit_end = (a_max - a_max_segment_angle) != 0.0f;
 
         _Path.reserve(_Path.Size + (a_mid_samples + 1 + (a_emit_start ? 1 : 0) + (a_emit_end ? 1 : 0)));
         if (a_emit_start)
