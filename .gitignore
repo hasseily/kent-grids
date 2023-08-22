@@ -1,3 +1,6 @@
 bin/
 .vs/
 .git/
+/Project/grid1_config.bin
+/Project/grid2_config.bin
+/Project/imgui.ini

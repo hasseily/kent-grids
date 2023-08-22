@@ -14,55 +14,140 @@
 #include <glm/glm.hpp>
 #include <stb_image.h>
 
-static bool showGrid1 = true;
-static bool showGrid2 = true;
-static int rows1 = 10, columns1 = 10;
-static int rows2 = 10, columns2 = 10;
-static ImColor color1 = IM_COL32(255, 0, 0, 255); // Red color
-static ImColor color2 = IM_COL32(0, 0, 255, 255); // Blue color
-static ImVec2 origin1 = ImVec2(0, 0);
-static ImVec2 origin2 = ImVec2(0, 0);
-static bool dotted1 = false;
-static bool dotted2 = false;
-
 struct GridParams {
 	bool showGrid = true;
 	int rows = 10, columns = 10;
 	ImColor color = IM_COL32(255, 0, 0, 255);
 	ImVec2 origin = ImVec2(0, 0);
 	bool dotted = false;
+	bool showNumbers = false;
+	ImColor numberColor = IM_COL32(255, 255, 255, 255);  // default to white
+	float fontSize = 14.0f;
+	float startingValue = 0.0f;
+	float increment = 1.0f;
+
 	std::map<std::pair<int, int>, ImColor> coloredCells; // stores (row, column) => color mapping
 };
 
-GridParams loadedParams1 = {
-	.showGrid = showGrid1,
-	.rows = rows1,
-	.columns = columns1,
-	.color = color1,
-	.origin = origin1,
-	.dotted = dotted1
-};
-
-GridParams loadedParams2 = {
-	.showGrid = showGrid2,
-	.rows = rows2,
-	.columns = columns2,
-	.color = color2,
-	.origin = origin2,
-	.dotted = dotted2
-};
+static GridParams loadedParams1;
+static GridParams loadedParams2;
 
 void SaveGridParams(const GridParams& params, const char* filename) {
 	std::ofstream file(filename, std::ios::binary);
 	if (file.is_open()) {
-		file.write((char*)&params, sizeof(GridParams));
+		file.write((char*)&params.showGrid, sizeof(bool));
+		file.write((char*)&params.rows, sizeof(int));
+		file.write((char*)&params.columns, sizeof(int));
+		file.write((char*)&params.dotted, sizeof(bool));
+		file.write((char*)&params.showNumbers, sizeof(bool));
+		file.write((char*)&params.fontSize, sizeof(float));
+		file.write((char*)&params.startingValue, sizeof(float));
+		file.write((char*)&params.increment, sizeof(float));
+
+		// Write ImVec2 values
+		file.write((char*)&params.origin, sizeof(ImVec2));
+
+		// Write ImColor values (RGBA)
+		int r, g, b, a;
+		r = params.color.Value.x * 255;
+		g = params.color.Value.y * 255;
+		b = params.color.Value.z * 255;
+		a = params.color.Value.w * 255;
+
+		file.write((char*)&r, sizeof(int));
+		file.write((char*)&g, sizeof(int));
+		file.write((char*)&b, sizeof(int));
+		file.write((char*)&a, sizeof(int));
+
+		r = params.numberColor.Value.x * 255;
+		g = params.numberColor.Value.y * 255;
+		b = params.numberColor.Value.z * 255;
+		a = params.numberColor.Value.w * 255;
+
+		file.write((char*)&r, sizeof(int));
+		file.write((char*)&g, sizeof(int));
+		file.write((char*)&b, sizeof(int));
+		file.write((char*)&a, sizeof(int));
+
+		// save the cell colors as well
+		int mapSize = params.coloredCells.size();
+		file.write((char*)&mapSize, sizeof(int));
+
+		for (const auto& pair : params.coloredCells) {
+			std::pair<int, int> rowColPair = pair.first;
+			ImColor color = pair.second;
+
+			file.write((char*)&rowColPair.first, sizeof(int));
+			file.write((char*)&rowColPair.second, sizeof(int));
+
+			int r, g, b, a;
+			r = color.Value.x * 255;
+			g = color.Value.y * 255;
+			b = color.Value.z * 255;
+			a = color.Value.w * 255;
+
+			file.write((char*)&r, sizeof(int));
+			file.write((char*)&g, sizeof(int));
+			file.write((char*)&b, sizeof(int));
+			file.write((char*)&a, sizeof(int));
+		}
+
 		file.close();
 	}
 }
 bool LoadGridParams(GridParams& params, const char* filename) {
 	std::ifstream file(filename, std::ios::binary);
 	if (file.is_open()) {
-		file.read((char*)&params, sizeof(GridParams));
+		file.read((char*)&params.showGrid, sizeof(bool));
+		file.read((char*)&params.rows, sizeof(int));
+		file.read((char*)&params.columns, sizeof(int));
+		file.read((char*)&params.dotted, sizeof(bool));
+		file.read((char*)&params.showNumbers, sizeof(bool));
+		file.read((char*)&params.fontSize, sizeof(float));
+		file.read((char*)&params.startingValue, sizeof(float));
+		file.read((char*)&params.increment, sizeof(float));
+
+		// Read ImVec2 values
+		file.read((char*)&params.origin, sizeof(ImVec2));
+
+		// Read ImColor values (RGBA)
+		int r, g, b, a;
+
+		file.read((char*)&r, sizeof(int));
+		file.read((char*)&g, sizeof(int));
+		file.read((char*)&b, sizeof(int));
+		file.read((char*)&a, sizeof(int));
+
+		params.color = ImColor(r, g, b, a);
+
+		file.read((char*)&r, sizeof(int));
+		file.read((char*)&g, sizeof(int));
+		file.read((char*)&b, sizeof(int));
+		file.read((char*)&a, sizeof(int));
+
+		params.numberColor = ImColor(r, g, b, a);
+
+		// load the cell colors as well
+		int mapSize;
+		file.read((char*)&mapSize, sizeof(int));
+
+		params.coloredCells.clear();
+
+		for (int i = 0; i < mapSize; ++i) {
+			std::pair<int, int> rowColPair;
+			int r, g, b, a;
+
+			file.read((char*)&rowColPair.first, sizeof(int));
+			file.read((char*)&rowColPair.second, sizeof(int));
+
+			file.read((char*)&r, sizeof(int));
+			file.read((char*)&g, sizeof(int));
+			file.read((char*)&b, sizeof(int));
+			file.read((char*)&a, sizeof(int));
+
+			ImColor color(r, g, b, a);
+			params.coloredCells[rowColPair] = color;
+		}
 		file.close();
 		return true;
 	}
@@ -74,19 +159,42 @@ void GridWidget(GridParams& params);
 
 void GridControlWidget()
 {
-	if (ImGui::CollapsingHeader("Grid 1 Controls"))
-		GridWidget(loadedParams1);
-	if (ImGui::CollapsingHeader("Grid 2 Controls"))
-		GridWidget(loadedParams2);
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 1.0f));
+	ImGui::Begin("Parameters");
+	ImGui::Text("Using Dear ImGui. Of course.");
+	ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 
-	if (showGrid1)
+	if (ImGui::CollapsingHeader("Grid 1 Controls"))
+	{
+		ImGui::PushID(111);
+		GridWidget(loadedParams1);
+		ImGui::PopID();
+	}
+	if (ImGui::CollapsingHeader("Grid 2 Controls"))
+	{
+		ImGui::PushID(2222);
+		GridWidget(loadedParams2);
+		ImGui::PopID();
+	}
+
+	ImGui::End();
+	ImGui::PopStyleColor();
+
+	ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 1.0f));
+	ImGui::Begin("Kent Grid");
+	if (loadedParams1.showGrid)
 	{
 		DrawGrid(loadedParams1);
 	}
-	if (showGrid2)
+	if (loadedParams2.showGrid)
 	{
 		DrawGrid(loadedParams2);
 	}
+	// Advance the ImGui cursor to claim space in the window
+	// (otherwise the window will appear small and needs to be resized)
+	ImGui::Dummy(ImVec2(400, 400));
+	ImGui::End();
+	ImGui::PopStyleColor();
 }
 
 void GridWidget(GridParams & params) {
@@ -96,6 +204,13 @@ void GridWidget(GridParams & params) {
 	ImGui::ColorEdit3("Grid Color", (float*)&params.color);
 	ImGui::InputFloat2("Grid Origin", (float*)&params.origin);
 	ImGui::Checkbox("Dotted Lines", &params.dotted);
+	ImGui::Checkbox("Show Numbers", &params.showNumbers);
+	if (params.showNumbers) {
+		ImGui::ColorEdit3("Number Color", (float*)&params.numberColor);
+		ImGui::SliderFloat("Font Size", &params.fontSize, 10.0f, 32.0f);
+		ImGui::InputFloat("Starting Value", &params.startingValue);
+		ImGui::InputFloat("Increment", &params.increment);
+	}
 
 	static int selectedRow = 0, selectedColumn = 0;
 	static ImColor selectedCellColor = IM_COL32(255, 255, 255, 255);
@@ -148,6 +263,28 @@ void DrawGrid(GridParams& params)
 		drawList->AddRectFilled(topLeft, bottomRight, cell.second);
 	}
 
+	// then the axes values
+	if (params.showNumbers) {
+		char number[16]; // buffer for number-to-string conversion
+
+		// Above the grid
+		for (int i = 0; i < params.columns; i++) {
+			float value = params.startingValue + i * params.increment;
+			snprintf(number, sizeof(number), "%.2f", value);  // assuming 2 decimal places
+			ImVec2 pos = ImVec2(xOffset + cellSize * i, yOffset - params.fontSize);
+			drawList->AddText(NULL, params.fontSize, pos, params.numberColor, number);
+		}
+
+		// To the left of the grid
+		for (int i = 0; i < params.rows; i++) {
+			float value = params.startingValue + i * params.increment;
+			snprintf(number, sizeof(number), "%.2f", value);  // assuming 2 decimal places
+			ImVec2 pos = ImVec2(xOffset - params.fontSize * 3, yOffset + cellSize * i);
+			drawList->AddText(NULL, params.fontSize, pos, params.numberColor, number);
+		}
+	}
+
+	// Finally the grid
 	for (int i = 0; i <= params.columns; i++)
 	{
 		ImVec2 start = ImVec2(xOffset + i * cellSize, yOffset);
@@ -203,7 +340,7 @@ int main(int argc, char* argv[]) {
 
 	int resX = 800, resY = 800;
 
-	window = SDL_CreateWindow("SDL2 Test Window", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, resX, resY, SDL_WINDOW_RESIZABLE);
+	window = SDL_CreateWindow("Kent Grid Tool", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, resX, resY, SDL_WINDOW_RESIZABLE);
 	renderer = SDL_CreateRenderer(window, -1, SDL_RENDERER_ACCELERATED);
 
 	SDL_SetRenderDrawColor(renderer, 0, 0, 0, 0);
@@ -223,27 +360,14 @@ int main(int argc, char* argv[]) {
 	ImGui_ImplSDLRenderer_Init(renderer);
 
 	// Load saved params
+	// set defaults first
+	loadedParams1.color = IM_COL32(255, 0, 0, 255); // Red color,
+	loadedParams2.color = IM_COL32(0, 0, 255, 255);
+	loadedParams2.origin = ImVec2(5, 5);
+	loadedParams2.dotted = true;
 
-	GridParams loadedParams1;
-	GridParams loadedParams2;
-
-	if (LoadGridParams(loadedParams1, "grid1_config.bin")) {
-		showGrid1 = loadedParams1.showGrid;
-		rows1 = loadedParams1.rows;
-		columns1 = loadedParams1.columns;
-		color1 = loadedParams1.color;
-		origin1 = loadedParams1.origin;
-		dotted1 = loadedParams1.dotted;
-	}
-
-	if (LoadGridParams(loadedParams2, "grid2_config.bin")) {
-		showGrid2 = loadedParams2.showGrid;
-		rows2 = loadedParams2.rows;
-		columns2 = loadedParams2.columns;
-		color2 = loadedParams2.color;
-		origin2 = loadedParams2.origin;
-		dotted2 = loadedParams2.dotted;
-	}
+	LoadGridParams(loadedParams1, "grid1_config.bin");
+	LoadGridParams(loadedParams2, "grid2_config.bin");
 
 	while (true) {
 		ImGui_ImplSDL2_ProcessEvent(&event);
@@ -260,16 +384,7 @@ int main(int argc, char* argv[]) {
 		ImGui_ImplSDL2_NewFrame();
 		ImGui::NewFrame();
 
-		ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 1.0f));
-		ImGui::Begin("Kent's Grid Thingie");
-		ImGui::Text("Using Dear ImGui. Of course.");
-		ImGui::Text("Application average %.3f ms/frame (%.1f FPS)", 1000.0f / ImGui::GetIO().Framerate, ImGui::GetIO().Framerate);
 		GridControlWidget();
-		// Advance the ImGui cursor to claim space in the window (otherwise the window will appear small and needs to be resized)
-		ImGui::Dummy(ImVec2(400, 400));
-		ImGui::End();
-		ImGui::PopStyleColor();
-
 
 		ImGui::Render();
 		SDL_SetRenderDrawColor(renderer, 124, 34, 151, 17);
@@ -280,10 +395,8 @@ int main(int argc, char* argv[]) {
 	}
 	// Cleanup
 
-	GridParams params1 = { showGrid1, rows1, columns1, color1, origin1, dotted1 };
-	GridParams params2 = { showGrid2, rows2, columns2, color2, origin2, dotted2 };
-	SaveGridParams(params1, "grid1_config.bin");
-	SaveGridParams(params2, "grid2_config.bin");
+	SaveGridParams(loadedParams1, "grid1_config.bin");
+	SaveGridParams(loadedParams2, "grid2_config.bin");
 
 	ImGui_ImplSDLRenderer_Shutdown();
 	ImGui_ImplSDL2_Shutdown();
