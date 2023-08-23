@@ -166,13 +166,13 @@ void GridControlWidget()
 
 	if (ImGui::CollapsingHeader("Grid 1 Controls"))
 	{
-		ImGui::PushID(111);
+		ImGui::PushID(1);
 		GridWidget(loadedParams1);
 		ImGui::PopID();
 	}
 	if (ImGui::CollapsingHeader("Grid 2 Controls"))
 	{
-		ImGui::PushID(2222);
+		ImGui::PushID(2);
 		GridWidget(loadedParams2);
 		ImGui::PopID();
 	}
@@ -221,9 +221,6 @@ void GridWidget(GridParams & params) {
 		if (it != params.coloredCells.end()) {
 			selectedCellColor = it->second;
 		}
-		else {
-			selectedCellColor = IM_COL32(255, 255, 255, 255);  // default to white if not previously set
-		}
 	}
 
 	if (ImGui::ColorEdit3("Cell Color", (float*)&selectedCellColor)) {
@@ -270,7 +267,7 @@ void DrawGrid(GridParams& params)
 		// Above the grid
 		for (int i = 0; i < params.columns; i++) {
 			float value = params.startingValue + i * params.increment;
-			snprintf(number, sizeof(number), "%.2f", value);  // assuming 2 decimal places
+			snprintf(number, sizeof(number), "%.1f", value);
 			ImVec2 pos = ImVec2(xOffset + cellSize * i, yOffset - params.fontSize);
 			drawList->AddText(NULL, params.fontSize, pos, params.numberColor, number);
 		}
@@ -278,7 +275,7 @@ void DrawGrid(GridParams& params)
 		// To the left of the grid
 		for (int i = 0; i < params.rows; i++) {
 			float value = params.startingValue + i * params.increment;
-			snprintf(number, sizeof(number), "%.2f", value);  // assuming 2 decimal places
+			snprintf(number, sizeof(number), "%.1f", value);
 			ImVec2 pos = ImVec2(xOffset - params.fontSize * 3, yOffset + cellSize * i);
 			drawList->AddText(NULL, params.fontSize, pos, params.numberColor, number);
 		}
